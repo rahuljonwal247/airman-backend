@@ -1,15 +1,19 @@
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
+
+ENV PRISMA_CLI_QUERY_ENGINE_TYPE=binary
+ENV PRISMA_CLI_ENGINE_TYPE=binary
+ENV PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x"
+
 COPY package*.json ./
 RUN npm ci
+
 COPY . .
 RUN npx prisma generate
 RUN npm run build
 
-FROM node:20-alpine AS runner
-
-RUN apk add --no-cache wget
+FROM node:20-slim AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -19,7 +23,6 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules ./node_modules
 
-# Run migrations then start
 CMD sh -c "npx prisma migrate deploy && node dist/server.js"
 
 EXPOSE 4000
