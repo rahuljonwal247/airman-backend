@@ -1,0 +1,260 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── TENANTS ────────────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                  User[]
+  courses                Course[]
+  bookings               Booking[]
+  instructorAvailability InstructorAvailability[]
+  auditLogs              AuditLog[]
+
+  @@map("tenants")
+}
+
+// ─── USERS & AUTH ────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  INSTRUCTOR
+  STUDENT
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role     @default(STUDENT)
+  isApproved   Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  tenantId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant                 Tenant                   @relation(fields: [tenantId], references: [id])
+  refreshTokens          RefreshToken[]
+  courses                Course[]                 @relation("InstructorCourses")
+  quizAttempts           QuizAttempt[]
+  studentBookings        Booking[]                @relation("StudentBookings")
+  instructorBookings     Booking[]                @relation("InstructorBookings")
+  instructorAvailability InstructorAvailability[]
+  auditLogs              AuditLog[]
+
+  @@unique([email, tenantId])
+  @@index([tenantId])
+  @@index([role, tenantId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─── LEARNING MODULE ─────────────────────────────────────────────────────────
+
+model Course {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  tenantId    String
+  instructorId String
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  instructor User     @relation("InstructorCourses", fields: [instructorId], references: [id])
+  modules    Module[]
+
+  @@index([tenantId])
+  @@index([tenantId, title])
+  @@map("courses")
+}
+
+model Module {
+  id        String   @id @default(uuid())
+  title     String
+  courseId  String
+  order     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId])
+  @@map("modules")
+}
+
+enum LessonType {
+  TEXT
+  QUIZ
+}
+
+model Lesson {
+  id        String     @id @default(uuid())
+  title     String
+  type      LessonType
+  content   String?
+  moduleId  String
+  order     Int
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  module  Module    @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  quiz    Quiz?
+
+  @@index([moduleId])
+  @@map("lessons")
+}
+
+model Quiz {
+  id        String   @id @default(uuid())
+  lessonId  String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lesson    Lesson        @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model Question {
+  id            String   @id @default(uuid())
+  quizId        String
+  text          String
+  options       Json     // string[]
+  correctAnswer Int      // index into options
+  order         Int
+  createdAt     DateTime @default(now())
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([quizId])
+  @@map("questions")
+}
+
+model QuizAttempt {
+  id          String   @id @default(uuid())
+  userId      String
+  quizId      String
+  answers     Json     // { questionId: string, selectedAnswer: number }[]
+  score       Float
+  totalPoints Int
+  earnedPoints Int
+  completedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  quiz Quiz @relation(fields: [quizId], references: [id])
+
+  @@index([userId, quizId])
+  @@map("quiz_attempts")
+}
+
+// ─── SCHEDULING MODULE ───────────────────────────────────────────────────────
+
+model InstructorAvailability {
+  id           String   @id @default(uuid())
+  instructorId String
+  tenantId     String
+  startTime    DateTime
+  endTime      DateTime
+  isRecurring  Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  instructor User   @relation(fields: [instructorId], references: [id])
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([instructorId, tenantId])
+  @@index([startTime, endTime])
+  @@map("instructor_availability")
+}
+
+enum BookingStatus {
+  REQUESTED
+  APPROVED
+  ASSIGNED
+  COMPLETED
+  CANCELLED
+}
+
+model Booking {
+  id           String        @id @default(uuid())
+  studentId    String
+  instructorId String?
+  tenantId     String
+  title        String
+  startTime    DateTime
+  endTime      DateTime
+  status       BookingStatus @default(REQUESTED)
+  notes        String?
+  escalatedAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  student    User   @relation("StudentBookings", fields: [studentId], references: [id])
+  instructor User?  @relation("InstructorBookings", fields: [instructorId], references: [id])
+  tenant     Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([instructorId, startTime, endTime])
+  @@index([studentId])
+  @@index([status, tenantId])
+  @@map("bookings")
+}
+
+// ─── AUDIT LOGS ──────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  userId        String?
+  tenantId      String
+  action        String
+  resource      String
+  resourceId    String?
+  before        Json?
+  after         Json?
+  correlationId String?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  user   User?  @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([userId])
+  @@index([correlationId])
+  @@map("audit_logs")
+}
